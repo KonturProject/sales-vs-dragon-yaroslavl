@@ -92,7 +92,9 @@ function reportError(err: unknown) {
             setStatus('Демо-режим (config.json.useMock=true): сервер отключён.', 'error');
             break;
         case 'bad_request':
-            if (err.detail?.field === 'dayoff') {
+            if (err.detail?.field === 'stale_day') {
+                refresh().then(() => setStatus('Наступил новый день — число обновлено. Проверьте его и сохраните снова.', 'error'));
+            } else if (err.detail?.field === 'dayoff') {
                 if (view) show({ ...view, today: { ...view.today, isWorkday: false } });
                 setStatus('Сегодня выходной — оплаты не вносятся.', 'error');
             } else setStatus('Число оплат — от 0 до 999.', 'error');
@@ -107,6 +109,7 @@ async function saveCount(count: number) {
     setStatus('Сохраняю…');
     try {
         const res = await callAsGroup<GroupView & { saved: { date: string; count: number; previous: number } }>('groupSetCount', pin, {
+            day: view.today.day, // a page left open overnight is refused instead of writing yesterday's number into today
             count,
             requestId: newRequestId(),
         });
@@ -134,6 +137,23 @@ pinForm.addEventListener('submit', async (e) => {
     } catch (err) {
         reportError(err);
     }
+});
+
+/** Re-reads today (the page may have stayed open since yesterday): the counter then starts from the right number. */
+async function refresh() {
+    if (!pin) return;
+    try {
+        show(await callAsGroup<GroupView>('groupLogin', pin));
+    } catch (err) {
+        reportError(err);
+    }
+}
+
+// Back to the tab after a while (a phone left on the table overnight): show today's numbers, not yesterday's.
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hiddenAt = Date.now();
+    else if (view && Date.now() - hiddenAt > 60_000) refresh();
 });
 
 $('logout').addEventListener('click', () => showLogin());

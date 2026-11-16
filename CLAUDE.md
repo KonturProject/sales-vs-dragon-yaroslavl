@@ -16,7 +16,7 @@ All commands run from `game/`.
 npm run dev            # dev server on :8080, hot reload
 npm run build          # production build to game/dist (index.html + admin.html + rg.html)
 npx tsc --noEmit -p tsconfig.json   # type-check
-npm run test:backend   # runs the real apps-script/Code.gs against fake Google services (52 tests)
+npm run test:backend   # runs the real apps-script/Code.gs against fake Google services (54 tests)
 npm run mock-backend   # same Code.gs on http://localhost:8787/exec, admin PIN 1234, a plan of 20 for today, data in memory
 npm run deploy         # build + publish dist/ to the gh-pages branch
 ```

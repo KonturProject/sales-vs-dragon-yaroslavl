@@ -79,7 +79,10 @@ class GameStateStore {
     applyStatus(status: StatusResponse): Record<string, number> | null {
         // A new day (or the first poll) is a baseline: the groups start again from zero, so nothing is diffed
         // against yesterday's numbers — no strikes, the heads simply regrow.
-        const previous = this.hasBaseline && status.day === this.day ? this.byRop : null;
+        // The same goes for a day that turns into a day off and back (the admin ticks «выходной» by mistake): the
+        // day-off poll emptied byRop, and diffing against that would replay the whole day as strikes.
+        const sameDay = status.day === this.day && (status.isWorkday !== false) === this.isWorkday;
+        const previous = this.hasBaseline && sameDay ? this.byRop : null;
 
         const nextByRop: Record<string, number> = {};
         for (const row of status.byRop) {

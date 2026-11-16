@@ -104,6 +104,12 @@ var COMMAND_HEROES = ['random'].concat(LEADER_SLOTS);
 
 /** Opening the spreadsheet is the slow part of a request (~0.5 s); do it once per execution, not once per helper. */
 var spreadsheet_ = null;
+/** The sheet's time zone, read once per execution. */
+var timeZone_ = null;
+function sheetTimeZone_() {
+  if (!timeZone_) timeZone_ = getSpreadsheet_().getSpreadsheetTimeZone();
+  return timeZone_;
+}
 function getSpreadsheet_() {
   if (!spreadsheet_) {
     var id = PropertiesService.getScriptProperties().getProperty(SPREADSHEET_ID_PROPERTY_KEY) || SPREADSHEET_ID;
@@ -288,14 +294,13 @@ function actionSetDayPlans_(body) {
 
   return withLock_(function () {
     var sheet = getPlansSheet_(true);
-    var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+    var tz = sheetTimeZone_();
     var values = sheet.getRange(1, 1, Math.max(1, sheet.getLastRow()), 3).getValues();
     var rowOf = {};
     for (var r = 1; r < values.length; r++) {
       var rd = saleDay_(values[r][0], tz);
       if (rd) rowOf[rd] = r;
     }
-    var appended = [];
     for (var c = 0; c < changes.length; c++) {
       var ch = changes[c];
       var line;
@@ -304,7 +309,6 @@ function actionSetDayPlans_(body) {
         line = [ch.day, '', ''];
         values.push(line);
         rowOf[ch.day] = values.length - 1;
-        appended.push(line);
       }
       line[0] = ch.day;
       if (ch.hasOwnProperty('plan')) line[1] = ch.plan === null ? '' : ch.plan;
@@ -320,7 +324,9 @@ function actionSetDayPlans_(body) {
 /** { from, to } of a plans listing: the given days, or Monday of this week to Friday of next week; null if invalid. */
 function planRange_(from, to) {
   if (from === undefined && to === undefined) {
-    var monday = addDays_(today_(), 1 - weekday_(today_()));
+    var today = today_();
+    // On a weekend the week that matters is the coming one.
+    var monday = weekday_(today) > 5 ? addDays_(today, 8 - weekday_(today)) : addDays_(today, 1 - weekday_(today));
     return { from: monday, to: addDays_(monday, 11) };
   }
   var f = validPlanDay_(from);
@@ -361,7 +367,7 @@ function readPlans_() {
   var sheet = getPlansSheet_(false);
   var plans = {};
   if (!sheet || sheet.getLastRow() < 2) return plans;
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
   var values = sheet.getRange(1, 1, sheet.getLastRow(), 3).getValues();
   for (var i = 1; i < values.length; i++) {
     var day = saleDay_(values[i][0], tz);
@@ -408,24 +414,35 @@ function previousWorkday_(day, plans) {
   return '';
 }
 
-/** 'yyyy-MM-dd' moved by n days (noon is used, so a clock change can never skip or repeat a day). */
+/**
+ * Calendar arithmetic on 'yyyy-MM-dd' strings, done in UTC: a calendar date has no time zone, so no Utilities call is
+ * needed (these run in loops on every poll — planFor_, previousWorkday_).
+ */
+function utcOf_(day) {
+  return Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10)));
+}
+
+function pad2_(n) {
+  return (n < 10 ? '0' : '') + n;
+}
+
+/** 'yyyy-MM-dd' moved by n days. */
 function addDays_(day, n) {
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
-  var noon = Utilities.parseDate(day + 'T12:00', tz, "yyyy-MM-dd'T'HH:mm");
-  return Utilities.formatDate(new Date(noon.getTime() + n * 86400000), tz, 'yyyy-MM-dd');
+  var d = new Date(utcOf_(day) + n * 86400000);
+  return d.getUTCFullYear() + '-' + pad2_(d.getUTCMonth() + 1) + '-' + pad2_(d.getUTCDate());
 }
 
 /** 1 = Monday … 7 = Sunday. */
 function weekday_(day) {
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
-  return Number(Utilities.formatDate(Utilities.parseDate(day + 'T12:00', tz, "yyyy-MM-dd'T'HH:mm"), tz, 'u'));
+  var w = new Date(utcOf_(day)).getUTCDay();
+  return w === 0 ? 7 : w;
 }
 
 /* ------------------------------------------------------------- day status */
 
 /** { total, byRop: { code: payments } } of one day. */
 function dayTotals_(table, day) {
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
   var byRop = {};
   var total = 0;
   for (var i = 1; i < table.values.length; i++) {
@@ -484,7 +501,7 @@ function actionListSales_(body) {
   if (!isFinite(limit) || limit < 1) limit = 50;
   limit = Math.min(limit, 200);
 
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
   var table = readSales_(false);
   var cols = table.cols;
   var values = table.values;
@@ -550,7 +567,7 @@ function setDayCount_(code, day, count) {
 
 /** { 'yyyy-MM-dd': payments } of one group, over the whole sheet. */
 function dayPayments_(table, code) {
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
   var days = {};
   for (var i = 1; i < table.values.length; i++) {
     var row = table.values[i];
@@ -570,10 +587,13 @@ function actionGroupLogin_(body, slot) {
 
 /**
  * The leader's own group's payments TODAY — the group comes from the PIN, never from the request, and the day is
- * always today (yesterday is settled by the morning import). Not on a day off.
+ * always today (yesterday is settled by the morning import): the page sends the day it shows (`day`), and a page
+ * still showing another day is refused with 'stale_day' and today's view. Not on a day off.
  */
 function actionGroupSetCount_(body, slot) {
   var today = today_();
+  // The page says which day it shows: one left open overnight must not write yesterday's number into today.
+  if (String(body.day || '') !== today) return groupView_(slot, badRequest_('stale_day'));
   if (!isWorkday_(today)) return badRequest_('dayoff');
   var count = validCount_(body.count);
   if (count === null) return badRequest_('count');
@@ -598,7 +618,7 @@ function groupView_(slot, res) {
 }
 
 function today_() {
-  return Utilities.formatDate(new Date(), getSpreadsheet_().getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+  return Utilities.formatDate(new Date(), sheetTimeZone_(), 'yyyy-MM-dd');
 }
 
 /* --------------------------------------------- group PINs (admin page side) */
@@ -689,7 +709,7 @@ function actionImportSales_(body) {
   }
 
   if (body.dryRun) {
-    var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+    var tz = sheetTimeZone_();
     var plans = readPlans_();
     var today = today_();
     var table = readSales_(false);
@@ -782,7 +802,7 @@ function rewriteSales_(table, replaced, incoming) {
   var sheet = table.sheet;
   var cols = table.cols;
   var values = table.values;
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
 
   var kept = [];
   var removed = { rows: 0, payments: 0 };
@@ -1003,7 +1023,7 @@ function validateAmount_(value) {
 function parseSaleDate_(value) {
   if (value === undefined || value === null || String(value).trim() === '') return new Date();
   var text = String(value).trim();
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
   var date = null;
   try {
     if (/^\d{4}-\d{2}-\d{2}$/.test(text)) date = Utilities.parseDate(text + 'T00:00', tz, "yyyy-MM-dd'T'HH:mm");
@@ -1023,7 +1043,7 @@ function validDay_(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
   var date = parseSaleDate_(text);
   // The round trip rejects days a lenient parser would roll over (2026-02-30 -> 2026-03-02).
-  return date && Utilities.formatDate(date, getSpreadsheet_().getSpreadsheetTimeZone(), 'yyyy-MM-dd') === text ? text : '';
+  return date && Utilities.formatDate(date, sheetTimeZone_(), 'yyyy-MM-dd') === text ? text : '';
 }
 
 /** The day ('yyyy-MM-dd', sheet time zone) a "Sales" Date cell belongs to; '' if it holds no readable date. */
@@ -1048,7 +1068,7 @@ function formatSaleDate_(date, tz) {
 function validPlanDay_(value) {
   var text = String(value === undefined || value === null ? '' : value).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return '';
-  var tz = getSpreadsheet_().getSpreadsheetTimeZone();
+  var tz = sheetTimeZone_();
   var date;
   try {
     date = Utilities.parseDate(text + 'T12:00', tz, "yyyy-MM-dd'T'HH:mm");

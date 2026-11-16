@@ -44,7 +44,7 @@ Standalone-проект (не привязан к таблице через ме
 | `action` | Параметры | Что делает |
 |---|---|---|
 | `groupLogin` | `groupPin` | какая группа (`group: {slot, code, leader}`) и сегодня (`today: {day, isWorkday, count, total}`) |
-| `groupSetCount` | `groupPin, count, requestId?` | число оплат своей группы **за сегодня** (день в запросе игнорируется); в выходной — `field: 'dayoff'` |
+| `groupSetCount` | `groupPin, day, count, requestId?` | число оплат своей группы **за сегодня**: `day` — день, который показывает страница; если это уже не сегодня (страница провисела с вечера) — `field: 'stale_day'` и свежий `today`; в выходной — `field: 'dayoff'` |
 
 Ответ — `{ok: true, …}` или `{ok: false, error}`: `invalid_pin`, `locked` (+`retryAfterSec`), `bad_request` (+`field`, у списков ещё `row`), `server_error` (+`detail`). После 5 неверных PIN за 10 минут API блокируется на 10 минут (у страницы РГ свой счётчик).
 
@@ -52,7 +52,7 @@ Standalone-проект (не привязан к таблице через ме
 
 ```bash
 cd game
-npm run test:backend      # 52 теста: день и план по дням, выходные и праздники, итог последнего рабочего дня, импорт, PIN, команды, герои, страница РГ
+npm run test:backend      # 54 теста: день и план по дням, выходные и праздники, итог последнего рабочего дня, импорт, PIN, команды, герои, страница РГ
 npm run mock-backend      # тот же Code.gs на http://localhost:8787/exec (PIN 1234, план 20 на сегодня, данные в памяти)
 ```
 

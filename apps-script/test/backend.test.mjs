@@ -75,6 +75,13 @@ test('Monday: the last working day is Friday, and its result is measured against
 
 /* ------------------------------------------------------------------ plans */
 
+test('listPlans on a weekend starts from the coming Monday', () => {
+    const b = at('2026-09-26T12:00:00');
+    const days = b.post({ action: 'listPlans', pin: PIN }).days.map(d => d.day);
+    assert.equal(days[0], '2026-09-28');
+    assert.equal(days.length, 10);
+});
+
 test('listPlans: Monday to Friday of this week and the next, with borrowed plans and days off marked', () => {
     const b = loadBackend({ plans: [['2026-09-21', 12, ''], ['2026-09-24', '', 'TRUE']] });
     const res = b.post({ action: 'listPlans', pin: PIN });
@@ -574,29 +581,39 @@ test('group PINs open only the group page, and the admin PIN does not open it', 
     assert.equal(JSON.stringify(b.salesRows()), sheet);
 });
 
-test('groupSetCount sets TODAY\'s payments of the PIN\'s own group, whatever group or day the request names', () => {
+test('groupSetCount refuses a page that still shows another day (left open overnight) and hands it today', () => {
     const b = withGroupPins();
-    const res = b.post({ action: 'groupSetCount', groupPin: '444444', rop: 'ЕСЦ1', date: '2026-09-21', count: 3, requestId: 'g1' });
+    const before = JSON.stringify(b.salesRows());
+    const stale = b.post({ action: 'groupSetCount', groupPin: '444444', day: '2026-09-22', count: 8 });
+    assert.equal(stale.field, 'stale_day');
+    assert.deepEqual(stale.today, { day: '2026-09-23', isWorkday: true, count: 0, total: 1 }, 'the fresh view comes with the refusal');
+    assert.equal(b.post({ action: 'groupSetCount', groupPin: '444444', count: 8 }).field, 'stale_day', 'the day must be sent');
+    assert.equal(JSON.stringify(b.salesRows()), before);
+});
+
+test('groupSetCount sets TODAY\'s payments of the PIN\'s own group, whatever group the request names', () => {
+    const b = withGroupPins();
+    const res = b.post({ action: 'groupSetCount', groupPin: '444444', rop: 'ЕСЦ1', day: '2026-09-23', count: 3, requestId: 'g1' });
     assert.deepEqual(res.saved, { rop: 'ЕСЦ4', date: '2026-09-23', count: 3, previous: 0 });
     assert.deepEqual(res.today, { day: '2026-09-23', isWorkday: true, count: 3, total: 4 });
     assert.equal(byRopOf(b.get())['ЕСЦ4'], 3);
     assert.equal(b.post({ action: 'dayCount', pin: PIN, rop: 'ЕСЦ1', date: '2026-09-21' }).count, 1, 'Monday untouched');
     const writes = b.salesSheet().setValuesCalls;
-    assert.deepEqual(b.post({ action: 'groupSetCount', groupPin: '444444', count: 3, requestId: 'g1' }), res, 'a retry writes nothing');
+    assert.deepEqual(b.post({ action: 'groupSetCount', groupPin: '444444', day: '2026-09-23', count: 3, requestId: 'g1' }), res, 'a retry writes nothing');
     assert.equal(b.salesSheet().setValuesCalls, writes);
-    assert.equal(b.post({ action: 'groupSetCount', groupPin: '444444', count: 1 }).today.count, 1, 'a mistake is fixed with a lower number');
-    for (const count of [-1, 1.5, 1000, 'abc', '', undefined]) assert.equal(b.post({ action: 'groupSetCount', groupPin: '444444', count }).field, 'count', String(count));
+    assert.equal(b.post({ action: 'groupSetCount', groupPin: '444444', day: '2026-09-23', count: 1 }).today.count, 1, 'a mistake is fixed with a lower number');
+    for (const count of [-1, 1.5, 1000, 'abc', '', undefined]) assert.equal(b.post({ action: 'groupSetCount', groupPin: '444444', day: '2026-09-23', count }).field, 'count', String(count));
 });
 
 test('groupSetCount on a weekend or a day off is refused; groupLogin says it is a day off', () => {
     const sat = at('2026-09-26T12:00:00');
     sat.post({ action: 'setGroupPins', pin: PIN, pins: { slot_2: '222222' } });
-    assert.equal(sat.post({ action: 'groupSetCount', groupPin: '222222', count: 1 }).field, 'dayoff');
+    assert.equal(sat.post({ action: 'groupSetCount', groupPin: '222222', day: '2026-09-26', count: 1 }).field, 'dayoff');
     assert.deepEqual(sat.post({ action: 'groupLogin', groupPin: '222222' }).today, { day: '2026-09-26', isWorkday: false, count: 0, total: 0 });
 
     const holiday = withGroupPins({ plans: [['2026-09-23', '', 'TRUE']] });
     const before = JSON.stringify(holiday.salesRows());
-    assert.equal(holiday.post({ action: 'groupSetCount', groupPin: '222222', count: 1 }).field, 'dayoff');
+    assert.equal(holiday.post({ action: 'groupSetCount', groupPin: '222222', day: '2026-09-23', count: 1 }).field, 'dayoff');
     assert.equal(JSON.stringify(holiday.salesRows()), before);
 });
 

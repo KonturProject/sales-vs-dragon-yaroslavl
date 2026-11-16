@@ -251,6 +251,11 @@ async function loadPlanTab() {
 }
 
 plansSave.addEventListener('click', async () => {
+    const unreadable = planDays.find(d => planInputs.get(d.day)?.plan.validity.badInput);
+    if (unreadable) {
+        setStatus(`План на ${dayName(unreadable.day)}: не число. Введите целое число оплат (пусто — взять с предыдущего дня).`, 'error');
+        return;
+    }
     const days = planChanges();
     if (days.length === 0) return;
     const bad = days.find(d => d.plan !== undefined && d.plan !== null && !(Number.isInteger(d.plan) && d.plan >= 0 && d.plan <= 99999));
@@ -267,7 +272,6 @@ plansSave.addEventListener('click', async () => {
         renderPlans();
         setStatus('План сохранён. Экраны подхватят его в течение ~15 секунд.', 'ok');
         tableStale = true;
-        loadPlanTab();
     } catch (err) {
         plansSave.disabled = false;
         reportError(err);
@@ -298,11 +302,10 @@ async function loadTable() {
         const s = res.status;
         const percent = s.plan > 0 ? Math.round((s.totalToday / s.plan) * 100) : 0;
 
-        const percent2 = percent;
         tableSummary.replaceChildren(
             chip('Сегодня', s.isWorkday ? ruDate(s.day) : `${ruDate(s.day)}, выходной`),
             chip('План дня', payments(s.plan)),
-            chip('Набрано', `${payments(s.totalToday)} (${percent2}%)`),
+            chip('Набрано', `${payments(s.totalToday)} (${percent}%)`),
             ...s.byRop.map(r => chip(r.ropName, payments(r.amount))),
         );
 
