@@ -1,0 +1,13 @@
+{
+    "_comment": "Who stands where when nothing else has been chosen yet (first start, no saved choice). The live choice is made in the admin page and stored in the backend; ids come from characters.json.",
+    "selection": {
+        "slot_1": "knight",
+        "slot_2": "hooded_blade",
+        "slot_3": "rogue",
+        "slot_4": "mage",
+        "slot_5": "druid",
+        "slot_6": "alchemist",
+        "slot_7": "ninja",
+        "slot_8": "knight_gold"
+    }
+}

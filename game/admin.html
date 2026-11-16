@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src-admin/styles.css">
+    <title>Админка — Победи дракона</title>
+</head>
+<body>
+    <div class="scene-glow"></div>
+    <div class="admin-card">
+        <div class="eyebrow">Победи дракона · Ярославль</div>
+        <h1 id="title">Панель управления</h1>
+
+        <form id="pin-form" onsubmit="event.preventDefault()">
+            <label for="pin">PIN-код</label>
+            <input id="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••••" required />
+            <button type="submit">Войти<span class="btn-arrow">→</span></button>
+        </form>
+
+        <div id="panel" hidden>
+            <nav class="tabs" role="tablist">
+                <button type="button" class="tab-btn active" data-tab="plan" role="tab">План</button>
+                <button type="button" class="tab-btn" data-tab="table" role="tab">Таблица</button>
+                <button type="button" class="tab-btn" data-tab="add" role="tab">Внести оплату</button>
+                <button type="button" class="tab-btn" data-tab="import" role="tab">Импорт</button>
+                <button type="button" class="tab-btn" data-tab="heroes" role="tab">Герои</button>
+                <button type="button" class="tab-btn" data-tab="anim" role="tab">Анимации</button>
+                <button type="button" class="tab-btn" data-tab="pin" role="tab">PIN-код</button>
+            </nav>
+
+            <!-- План -->
+            <section class="tab" data-tab-panel="plan">
+                <p id="current-status" class="current-status" hidden></p>
+                <form id="plan-form" onsubmit="event.preventDefault()">
+                    <label for="plan">Недельный план, оплат <span class="optional">(штук, не рублей)</span></label>
+                    <input id="plan" name="plan" type="number" min="0" step="1" inputmode="numeric" placeholder="60" required />
+                    <button type="submit">Сохранить план<span class="btn-arrow">→</span></button>
+                </form>
+            </section>
+
+            <!-- Таблица -->
+            <section class="tab" data-tab-panel="table" hidden>
+                <div class="toolbar">
+                    <button type="button" id="table-refresh" class="ghost">Обновить</button>
+                    <span id="table-meta" class="meta"></span>
+                </div>
+                <div id="table-summary" class="chips"></div>
+                <div class="table-wrap">
+                    <table id="sales-table">
+                        <thead><tr><th>Строка</th><th>Дата</th><th>Отдел</th><th class="num">Оплат</th><th>№ счёта</th></tr></thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Внести оплату -->
+            <section class="tab" data-tab-panel="add" hidden>
+                <div class="count-form">
+                    <label for="add-rop">Группа</label>
+                    <select id="add-rop"></select>
+                    <label for="add-date">Дата</label>
+                    <input id="add-date" type="date" />
+                </div>
+                <div id="add-counter"></div>
+                <p class="hint">То же, что видят РГ на своей странице: число — сколько оплат у группы на этот день. «+» и «−», затем «Сохранить». Это настоящая запись в таблице «победи дракона»: если число на этой неделе выросло — герой группы ударит дракона на экранах.</p>
+            </section>
+
+            <!-- Импорт -->
+            <section class="tab" data-tab-panel="import" hidden>
+                <p class="hint">Выгрузка «Детальные данные по оплаченным счетам» (.xlsx). Файл читается прямо здесь, в браузере: в таблицу уходят только дата оплаты, сумма, группа и номер счёта — клиенты, ИНН и продукты никуда не отправляются. Один счёт — одна оплата; счета дешевле 100 ₽ не считаются.</p>
+                <p class="hint">Файл заменяет оплаты за свой период — с первой по последнюю дату оплаты в нём, включая числа, сохранённые РГ. Поэтому загружайте выгрузку по всем группам сразу; повторная загрузка той же или более свежей выгрузки ничего не задвоит.</p>
+                <label class="file-pick">
+                    <input id="import-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+                    <span class="file-btn">Выбрать файл…</span>
+                    <span id="import-file-name" class="file-name">файл не выбран</span>
+                </label>
+                <div id="import-preview" hidden>
+                    <div id="import-summary" class="chips"></div>
+                    <div class="table-wrap">
+                        <table id="import-table">
+                            <thead><tr><th>Группа</th><th class="num">Сейчас за период, оплат</th><th class="num">Станет, оплат</th></tr></thead>
+                            <tbody></tbody>
+                            <tfoot></tfoot>
+                        </table>
+                    </div>
+                    <ul id="import-notes" class="notes"></ul>
+                    <button type="button" id="import-run" class="primary-btn">Загрузить в таблицу<span class="btn-arrow">→</span></button>
+                </div>
+            </section>
+
+            <!-- Герои -->
+            <section class="tab" data-tab-panel="heroes" hidden>
+                <p class="hint">Кто стоит на экране за каждую группу, чьё имя на табличке группы («ВШ1 • Фамилия И.» — так же в рейтинге слева сверху) и кто лидер филиала. Героя выберите из списка (или нажмите на героя в галерее ниже — он встанет на выбранное место), РГ впишите в поле — можно вставить полное ФИО, сохранится «Фамилия И.». Сохраните: экраны подхватят изменения в течение ~15 секунд. Таблицу и суммы это не затрагивает.</p>
+                <div id="roster-rows" class="roster-rows"></div>
+                <button type="button" id="roster-save" class="primary-btn">Сохранить героев и РГ<span class="btn-arrow">→</span></button>
+                <h2>Все герои</h2>
+                <div id="roster-gallery" class="gallery"></div>
+            </section>
+
+            <!-- Анимации -->
+            <section class="tab" data-tab-panel="anim" hidden>
+                <p class="hint">Анимации только показываются на экранах — данные и таблицу они не меняют. Экраны подхватывают команду при очередном опросе, обычно в течение 15 секунд.</p>
+
+                <h2>Удар отдела</h2>
+                <div class="inline-field">
+                    <label for="anim-count">Оплат в подписи</label>
+                    <input id="anim-count" type="number" min="1" max="999" step="1" value="1" />
+                </div>
+                <div id="anim-hits" class="btn-grid"></div>
+
+                <h2>Персонажи</h2>
+                <div class="inline-field">
+                    <label for="anim-hero">Кто</label>
+                    <select id="anim-hero"></select>
+                </div>
+                <div class="btn-grid">
+                    <button type="button" class="anim-btn" data-cmd="fall" data-mode="fall">Упасть</button>
+                    <button type="button" class="anim-btn" data-cmd="fall" data-mode="doze">Заснуть</button>
+                    <button type="button" class="anim-btn" data-cmd="wake">Поднять всех</button>
+                </div>
+
+                <h2>Дракон</h2>
+                <div class="btn-grid">
+                    <button type="button" class="anim-btn" data-cmd="growl">Рычание и дрожь</button>
+                </div>
+
+                <h2>Праздник</h2>
+                <div class="btn-grid">
+                    <button type="button" class="anim-btn" data-cmd="confetti">Конфетти</button>
+                    <button type="button" class="anim-btn" data-cmd="celebrate">Все празднуют</button>
+                </div>
+            </section>
+
+            <!-- PIN -->
+            <section class="tab" data-tab-panel="pin" hidden>
+                <form id="pin-change-form" onsubmit="event.preventDefault()">
+                    <label for="pin-old">Текущий PIN-код</label>
+                    <input id="pin-old" type="password" inputmode="numeric" autocomplete="off" required />
+                    <label for="pin-new">Новый PIN-код <span class="optional">(4–12 цифр)</span></label>
+                    <input id="pin-new" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{4,12}" required />
+                    <label for="pin-new2">Новый PIN-код ещё раз</label>
+                    <input id="pin-new2" type="password" inputmode="numeric" autocomplete="new-password" pattern="[0-9]{4,12}" required />
+                    <button type="submit">Сменить PIN<span class="btn-arrow">→</span></button>
+                </form>
+                <p class="hint">После смены прежний PIN перестанет работать. После нескольких неверных вводов подряд вход блокируется на 10 минут.</p>
+
+                <h2>PIN-коды руководителей групп</h2>
+                <p class="hint">У каждого РГ свой PIN для страницы <a id="rg-link" href="rg.html" target="_blank" rel="noopener">«Оплаты группы»</a> — там можно только внести оплату своей группы; группу страница узнаёт по PIN. PIN создаётся случайно и показывается здесь один раз: скопируйте и раздайте РГ. Новый PIN сразу отменяет прежний (например, если старый кто-то узнал).</p>
+                <div id="group-pins" class="group-pins"></div>
+                <button type="button" id="group-pins-all" class="primary-btn">Создать PIN для всех групп<span class="btn-arrow">→</span></button>
+                <div id="group-pins-out" class="pin-out" hidden>
+                    <pre id="group-pins-text"></pre>
+                    <button type="button" id="group-pins-copy" class="ghost">Скопировать</button>
+                    <p class="hint">Эти PIN больше нигде не показываются (хранится только их отпечаток) — после выхода из админки их не увидеть. Потеряли — создайте новый.</p>
+                </div>
+            </section>
+
+            <button type="button" id="logout" class="ghost logout">Выйти</button>
+        </div>
+
+        <p id="status" role="status"></p>
+    </div>
+
+    <script type="module" src="/src-admin/main.ts"></script>
+</body>
+</html>
