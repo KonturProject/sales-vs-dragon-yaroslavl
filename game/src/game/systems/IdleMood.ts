@@ -28,12 +28,14 @@ function overlap(a: Span, b: Span): number {
  */
 export class IdleMood {
     private idleMs = 0;
+    /** A day off: nobody is expected to sell, so nobody gets bored (and the dragon does not growl). */
+    private paused = false;
 
     constructor(
         private scene: Scene,
         private heroes: HeroSprite[],
         private dragon: Dragon,
-        /** Things a fallen hero should avoid lying on (the branch lead's extent). */
+        /** Things a fallen hero should avoid lying on. */
         private obstacles: Span[] = [],
     ) {
         scene.time.addEvent({ delay: IDLE.CHECK_MS, loop: true, callback: () => this.tick(false) });
@@ -72,7 +74,16 @@ export class IdleMood {
         return this.heroes.filter(h => h.isAsleep).length;
     }
 
+    /** A day off began (true) or a working day (false): the idle clock stops and everybody gets up. */
+    setPaused(paused: boolean) {
+        if (this.paused === paused) return;
+        this.paused = paused;
+        this.idleMs = 0;
+        this.wakeAll();
+    }
+
     private tick(force: boolean) {
+        if (this.paused) return;
         this.idleMs += force ? 0 : IDLE.CHECK_MS;
         if (this.asleepCount() < this.dueCount() && (force || Math.random() < IDLE.DROP_CHANCE)) this.dropOne();
     }
@@ -134,7 +145,7 @@ export class IdleMood {
         const min = quiet ? DRAGON.GROWL_IDLE_MIN_MS : DRAGON.GROWL_MIN_MS;
         const max = quiet ? DRAGON.GROWL_IDLE_MAX_MS : DRAGON.GROWL_MAX_MS;
         this.scene.time.delayedCall(min + Math.random() * (max - min), () => {
-            this.dragon.growl();
+            if (!this.paused) this.dragon.growl();
             this.scheduleGrowl();
         });
     }

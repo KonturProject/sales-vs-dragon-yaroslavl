@@ -14,8 +14,8 @@ export const GAME = {
     RENDER_SCALE: QUALITY.renderScale,
 } as const;
 
-/** Weekly plan is split into this many equal daily plans; each one crossed costs the dragon a head. */
-export const DAYS = 5;
+/** The day's plan is split into this many equal parts; each one crossed costs the dragon a head. */
+export const HEADS = 5;
 
 /**
  * Dragon + gold mountain, on the sandy ground at the right of the canyon
@@ -23,7 +23,7 @@ export const DAYS = 5;
  * tools/build-sprites.py, so they render at scale 0.5. Static — no idle bob.
  */
 export const DRAGON = {
-    HEADS_MAX: DAYS,
+    HEADS_MAX: HEADS,
     /**
      * The whole group (mountain + dragon) is drawn at SCALE × its original size and moved right, away from the
      * heroes — the original layout (MOUNT_X 945, BODY_X 967, BODY_BOTTOM_Y 412, HIT 823/292) scaled about the
@@ -62,12 +62,14 @@ export const HERO = {
      * PenScene sorts depth by `y` so the front row draws over the back row.
      */
     SLOTS: [
-        { x: 195, y: 508, scale: 0.70 },
-        { x: 283, y: 578, scale: 0.77 },
-        { x: 371, y: 508, scale: 0.70 },
-        { x: 459, y: 578, scale: 0.77 },
-        { x: 547, y: 508, scale: 0.70 },
-        { x: 635, y: 578, scale: 0.77 },
+        { x: 110, y: 508, scale: 0.70 },
+        { x: 198, y: 578, scale: 0.77 },
+        { x: 286, y: 508, scale: 0.70 },
+        { x: 374, y: 578, scale: 0.77 },
+        { x: 462, y: 508, scale: 0.70 },
+        { x: 550, y: 578, scale: 0.77 },
+        { x: 638, y: 508, scale: 0.70 },
+        { x: 726, y: 578, scale: 0.77 },
     ],
     /** Hero textures are 1/0.75 times their on-screen size (see tools/build-characters.py). */
     TEXTURE_SCALE: 0.75,
@@ -93,8 +95,6 @@ export const HERO = {
     STRIKE_FRONT_X: 875,
     /** How far the hero steps back in the wind-up, px. */
     WINDUP_BACK: 24,
-    /** Branch lead stands apart from the department heroes, far left, ~12 % taller than a front-row hero (so it stands out, but not too much). */
-    LEAD: { x: 100, y: 540, scale: 0.86 },
     /**
      * Nameplate «ЕСЦ1 • Фамилия И.» of each department (objects/NamePlate.ts): over the head for the back row, under
      * the feet for the front row — so a plate never covers a neighbour of the other row. It stays at the slot while
@@ -132,16 +132,13 @@ export const IDLE = {
 
 /**
  * The standing heroes breathe — one at a time, so the picture is never quite still but the weak office laptops
- * only animate a single figure: each of the seven (six heroes, then the branch lead) gets TURN_MS, then passes
+ * only animate a single figure: each of the eight heroes gets TURN_MS, then passes
  * the baton to the next (~5 minutes for the whole round). While someone breathes the game draws at the
  * "ambient" frame rate (core/PowerSaver.ts) so the loop looks smooth; the loop is a frame swap, one step per FRAME_MS.
  */
 export const IDLE_ANIM = {
     FRAME_MS: 100,
     TURN_MS: 40_000,
-    /** The branch lead dashes this far toward the heroes when it cheers a sale, and comes back. */
-    LEAD_DASH_PX: 55,
-    LEAD_DASH_MS: 300,
 } as const;
 
 export const HUD = {
@@ -183,9 +180,9 @@ export const POLL = {
 } as const;
 
 /**
- * Places on the stage, not characters: six department slots (left to right, matching HERO.SLOTS and the order in
- * config/ropMapping.json) and the branch lead. Which character stands in a slot is a runtime choice made in the
- * admin page (systems/RosterConfig.ts).
+ * Places on the stage, not characters: eight department slots, left to right, matching HERO.SLOTS and the order in
+ * config/ropMapping.json. Which character stands in a slot is a runtime choice made in the admin page
+ * (systems/RosterConfig.ts). There is no branch lead in the Yaroslavl edition.
  */
 export const HERO_SLUGS = [
     'slot_1',
@@ -194,7 +191,8 @@ export const HERO_SLUGS = [
     'slot_4',
     'slot_5',
     'slot_6',
-    'lead',
+    'slot_7',
+    'slot_8',
 ] as const;
 
 export type HeroSlug = typeof HERO_SLUGS[number];

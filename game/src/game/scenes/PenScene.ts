@@ -1,7 +1,7 @@
 import { Scene } from 'phaser';
 import {
     EventBus, GameEvents, MoneyInPayload, ProgressChangedPayload, DragonHeadLostPayload, DragonDefeatedPayload, AdminCommandPayload,
-    RosterChangedPayload, LeadersChangedPayload,
+    RosterChangedPayload, LeadersChangedPayload, DayStatePayload,
 } from '../core/EventBus';
 import { GameState } from '../core/GameState';
 import { fitCameraToGame } from '../core/Render';
@@ -11,19 +11,18 @@ import { loadCharacters } from '../systems/CharacterLoader';
 import { DataPollingService } from '../systems/DataPollingService';
 import { Dragon } from '../objects/Dragon';
 import { HeroSprite } from '../objects/HeroSprite';
-import { LeadSprite } from '../objects/LeadSprite';
 import { NamePlate, PLATE_HEIGHT } from '../objects/NamePlate';
 import { IdleMood } from '../systems/IdleMood';
 import { LiveStand } from '../systems/LiveStand';
 import { emitFloatingPayments, startIdleSway } from '../systems/Fx';
 import { AudioSystem } from '../systems/Audio';
 
-/** Above every hero (their depth is the feet's y, at most ~600) and the lead, below the hit effects (1400). */
+/** Above every hero (their depth is the feet's y, at most ~600), below the hit effects (1400). */
 const PLATE_DEPTH = 1000;
 
 /**
- * The tableau: department heroes on the left, the dragon on its gold mountain
- * on the right, the branch lead standing apart. Reacts to game events only —
+ * The tableau: eight department heroes on the left, the dragon on its gold mountain
+ * on the right. Reacts to game events only —
  * decisions about *what* happens (which hero hit, how many heads are left) are
  * made upstream in DataPollingService / GameState.
  */
@@ -31,7 +30,6 @@ export class PenScene extends Scene {
     private dragon!: Dragon;
     private heroes = new Map<string, HeroSprite>();
     private plates = new Map<string, NamePlate>();
-    private lead: LeadSprite | null = null;
     private hasAppliedFirstProgress = false;
     private hasPlayedVictory = false;
     /** Falls asleep when nobody sells for a long time; makes the dragon growl (see systems/IdleMood.ts). */
@@ -66,14 +64,10 @@ export class PenScene extends Scene {
             this.plates.set(def.slug, new NamePlate(this, slot.x, plateY, RosterConfig.plateText(def.slug)).setDepth(PLATE_DEPTH));
         });
 
-        const leadDef = RosterConfig.lead;
-        this.lead = new LeadSprite(this, HERO.LEAD.x, HERO.LEAD.y, leadDef, HERO.LEAD.scale);
-        this.lead.setDepth(HERO.LEAD.y);
-
-        startIdleSway(this, [...this.heroes.values(), ...(this.lead ? [this.lead] : [])]);
-        // The live stand goes round: one of the seven breathes at a time (see systems/LiveStand.ts).
-        new LiveStand(this, [...this.heroes.values(), ...(this.lead ? [this.lead] : [])]);
-        this.mood = new IdleMood(this, [...this.heroes.values()], this.dragon, this.lead ? [this.lead.span()] : []);
+        startIdleSway(this, [...this.heroes.values()]);
+        // The live stand goes round: one of the eight breathes at a time (see systems/LiveStand.ts).
+        new LiveStand(this, [...this.heroes.values()]);
+        this.mood = new IdleMood(this, [...this.heroes.values()], this.dragon);
 
         EventBus.on(GameEvents.MONEY_IN, this.onMoneyIn, this);
         EventBus.on(GameEvents.PROGRESS_CHANGED, this.onProgressChanged, this);
@@ -82,8 +76,10 @@ export class PenScene extends Scene {
         EventBus.on(GameEvents.ADMIN_COMMAND, this.onAdminCommand, this);
         EventBus.on(GameEvents.ROSTER_CHANGED, this.onRosterChanged, this);
         EventBus.on(GameEvents.LEADERS_CHANGED, this.onLeadersChanged, this);
+        EventBus.on(GameEvents.DAY_STATE, this.onDayState, this);
 
         this.events.once('shutdown', () => {
+            EventBus.off(GameEvents.DAY_STATE, this.onDayState, this);
             EventBus.off(GameEvents.ROSTER_CHANGED, this.onRosterChanged, this);
             EventBus.off(GameEvents.LEADERS_CHANGED, this.onLeadersChanged, this);
             EventBus.off(GameEvents.ADMIN_COMMAND, this.onAdminCommand, this);
@@ -97,7 +93,7 @@ export class PenScene extends Scene {
         // scene finished creating), then start/continue polling.
         this.onProgressChanged({
             ratio: GameState.ratio,
-            totalThisWeek: GameState.totalThisWeek,
+            totalToday: GameState.totalToday,
             plan: GameState.plan,
             headsRemaining: GameState.headsRemaining,
         });
@@ -109,10 +105,7 @@ export class PenScene extends Scene {
     private onRosterChanged(payload: RosterChangedPayload) {
         const defs = payload.slots.map(slot => RosterConfig.heroDef(slot as never)).filter((d): d is HeroDef => !!d);
         loadCharacters(this, defs, () => {
-            for (const def of defs) {
-                if (def.lead) this.lead?.setCharacter(def);
-                else this.heroes.get(def.slug)?.setCharacter(def);
-            }
+            for (const def of defs) this.heroes.get(def.slug)?.setCharacter(def);
         });
     }
 
@@ -121,9 +114,14 @@ export class PenScene extends Scene {
         for (const slot of payload.slots) this.plates.get(slot)?.setText(RosterConfig.plateText(slot as HeroSlug));
     }
 
+    /** A day off: the dragon dozes and nobody gets bored; a working day wakes it. */
+    private onDayState(payload: DayStatePayload) {
+        this.dragon.setResting(!payload.isWorkday);
+        this.mood.setPaused(!payload.isWorkday);
+    }
+
     private onMoneyIn(payload: MoneyInPayload) {
-        // The hero dashes to the dragon; the thud, the dragon's reaction and the
-        // lead's cheer all land with the blow, not with the sale event.
+        // The hero dashes to the dragon; the thud and the dragon's reaction land with the blow, not with the sale event.
         this.time.delayedCall(HERO.IMPACT_MS, () => AudioSystem.playHitThud());
 
         const hero = this.heroes.get(payload.heroSlug);
@@ -136,8 +134,6 @@ export class PenScene extends Scene {
             );
         }
 
-        // The branch lead isn't tied to one department — she cheers on every sale.
-        this.time.delayedCall(HERO.IMPACT_MS, () => this.lead?.playCheer());
     }
 
     /**
@@ -166,7 +162,13 @@ export class PenScene extends Scene {
             case 'celebrate':
                 AudioSystem.playFanfare();
                 this.heroes.forEach(hero => { if (hero.canSway()) hero.playCelebrate(); });
-                this.lead?.playCheer();
+                break;
+            case 'dayResult':
+                // The last working day's dragon fell: the heroes cheer (the banner itself is HUDScene's).
+                if (cmd.args.defeated) {
+                    AudioSystem.playFanfare();
+                    this.heroes.forEach(hero => { if (hero.canSway()) hero.playCelebrate(); });
+                }
                 break;
             // 'confetti' is drawn by HUDScene (full-screen effect).
         }
@@ -175,22 +177,21 @@ export class PenScene extends Scene {
     private onProgressChanged(payload: ProgressChangedPayload) {
         // Heads only ever *drop* through DRAGON_HEAD_LOST (animated, delayed so the
         // blows read first). Here we handle the baseline on load and regrowth
-        // (a new week or a raised plan pushed the ratio back down).
+        // (a new day or a raised plan pushed the ratio back down).
         // The baseline is the first application made *after real data has landed*
         // (create() also calls this once with an empty GameState — that one must not
         // count, or the first poll's lower head count would be treated as a drop).
         if (!this.hasAppliedFirstProgress) {
             this.dragon.setHeads(payload.headsRemaining, false);
             this.hasAppliedFirstProgress = GameState.hasBaseline;
+        } else if (payload.reset && payload.headsRemaining !== this.dragon.headCount) {
+            // A new day: today's dragon, as it stands — no head-loss animation for payments made before this poll.
+            this.dragon.setHeads(payload.headsRemaining, payload.headsRemaining > this.dragon.headCount);
         } else if (payload.headsRemaining > this.dragon.headCount) {
             this.dragon.setHeads(payload.headsRemaining, true);
         }
 
-        // Finale already played and we've dropped back under 100%: relax the victory pose.
-        if (this.hasPlayedVictory && payload.ratio < 1) {
-            this.hasPlayedVictory = false;
-            this.lead?.resetPose();
-        }
+        if (this.hasPlayedVictory && payload.ratio < 1) this.hasPlayedVictory = false;
     }
 
     // Both handlers are delayed (so the blows read first), and the data can move
@@ -211,7 +212,6 @@ export class PenScene extends Scene {
             this.hasPlayedVictory = true;
             this.dragon.defeat();
             this.heroes.forEach(hero => hero.playCelebrate());
-            this.lead?.playVictory();
             this.cameras.main.shake(300, 0.008);
         });
     }

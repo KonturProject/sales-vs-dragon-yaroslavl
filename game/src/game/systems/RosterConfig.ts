@@ -16,21 +16,18 @@ export interface CharacterDef {
     idle?: { frames: number; width: number; height: number };
 }
 
-/** What a slot (a department, or the branch lead) needs to draw: the standing texture, the strike frames, the colour. */
+/** What a slot (a department) needs to draw: the standing texture, the strike frames, the colour. */
 export interface HeroDef {
     slug: HeroSlug;
     characterId: string;
     sprite: string;
     color: string;
-    lead: boolean;
     hits: number;
     idle?: { frames: number; width: number; height: number };
 }
 
 export type Selection = Record<string, string>;
 
-export const LEAD_SLOT: HeroSlug = 'lead';
-const FIGHTER_SLOTS = HERO_SLUGS.filter(s => s !== LEAD_SLOT);
 
 const characters = characterList.characters as CharacterDef[];
 
@@ -74,24 +71,16 @@ let leaders: Record<string, string> = readStored(LEADERS_STORAGE_KEY, sanitiseLe
 
 function def(slot: HeroSlug): HeroDef {
     const ch = characters.find(c => c.id === selection[slot]) ?? characters[0];
-    return { slug: slot, characterId: ch.id, sprite: `char_${ch.id}`, color: ch.color, lead: slot === LEAD_SLOT, hits: ch.hits, idle: ch.idle };
+    return { slug: slot, characterId: ch.id, sprite: `char_${ch.id}`, color: ch.color, hits: ch.hits, idle: ch.idle };
 }
 
 export const RosterConfig = {
     /** Every selectable character (the admin page's list). */
     characters,
 
-    /** Department slots, left to right, then the lead — the current look of each. */
-    get heroes(): HeroDef[] {
-        return HERO_SLUGS.map(def);
-    },
-
+    /** Department slots, left to right — the current look of each. */
     get fighters(): HeroDef[] {
-        return FIGHTER_SLOTS.map(def);
-    },
-
-    get lead(): HeroDef {
-        return def(LEAD_SLOT);
+        return HERO_SLUGS.map(def);
     },
 
     /** The slot of a department, from the name as written in the sheet; null if it is not one of ours. */

@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
             hit: (heroSlug: string, delta = 1) => {
                 EventBus.emit(GameEvents.MONEY_IN, { heroSlug, ropName: 'debug', delta });
             },
-            /** Simulate the weekly total reaching `ratio` (0..1) of the plan: fires the same diff/events a real poll would. */
+            /** Simulate today's total reaching `ratio` (0..1) of the plan: fires the same diff/events a real poll would. */
             setRatio: (ratio: number) => {
                 const plan = GameState.plan || 60;
                 const total = Math.round(plan * ratio);
@@ -30,11 +30,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     ? Object.entries(GameState.byRop).map(([ropName, amount]) => ({ ropName, amount }))
                     : [{ ropName: 'ЕСЦ1', amount: 0 }];
                 const first = rows[0];
-                first.amount += total - GameState.totalThisWeek;
+                first.amount += total - GameState.totalToday;
                 (window as any).__debug.injectStatus({
-                    ok: true, weekStart: '', weekEnd: '', plan, totalThisWeek: total, byRop: rows,
+                    ok: true, day: GameState.day || '2026-09-23', isWorkday: true, plan, totalToday: total, byRop: rows,
+                    lastResult: GameState.lastResult, lastUpdated: new Date().toISOString(),
+                } satisfies StatusResponse);
+            },
+            /** `__debug.dayOff(true)` — what a poll on a weekend / holiday does (false: back to a working day). */
+            dayOff: (off = true) => {
+                (window as any).__debug.injectStatus({
+                    ok: true, day: GameState.day || '2026-09-26', isWorkday: !off, plan: off ? 0 : GameState.plan || 20,
+                    totalToday: off ? 0 : GameState.totalToday,
+                    byRop: off ? [] : Object.entries(GameState.byRop).map(([ropName, amount]) => ({ ropName, amount })),
+                    lastResult: GameState.lastResult ?? { day: '2026-09-25', total: 12, plan: 15, headsCut: 4, defeated: false },
                     lastUpdated: new Date().toISOString(),
-                });
+                } satisfies StatusResponse);
             },
             /** Feed a status object through the real poll pipeline (diff -> hits, head loss, victory) without any network. */
             injectStatus: (status: StatusResponse) => {
@@ -49,7 +59,8 @@ document.addEventListener('DOMContentLoaded', () => {
             mood: () => (game.scene.getScene('PenScene') as PenScene).mood,
             /** `__debug.command('hit', { rop: 'ЕСЦ1', count: 2 })` — what the admin page's animation buttons cause. */
             command: (type: string, args: Record<string, unknown> = {}) => EventBus.emit(GameEvents.ADMIN_COMMAND, { type, args }),
-            /** `__debug.roster({ slot_1: 'ninja', lead: 'queen' })` — what a poll does when the admin picked other heroes (no argument: show the current choice). */
+            /** `__debug.command('dayResult', { day: '2026-09-22', total: 20, plan: 20, headsCut: 5, defeated: true })` — the morning announcement. */
+            /** `__debug.roster({ slot_1: 'ninja' })` — what a poll does when the admin picked other heroes (no argument: show the current choice). */
             roster: (choice?: Record<string, string>) => {
                 if (!choice) return RosterConfig.selection;
                 const slots = RosterConfig.applySelection({ ...RosterConfig.selection, ...choice });

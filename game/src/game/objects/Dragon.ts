@@ -19,6 +19,8 @@ export class Dragon extends GameObjects.Container {
     /** Bumped by every state change; a delayed texture swap that finds it changed was superseded and must not apply. */
     private epoch = 0;
     private defeated = false;
+    /** A day off: the dragon dozes (darkened, never growls) until the next working day. */
+    private resting = false;
     private growling = false;
     private growlTweens: Tweens.Tween[] = [];
     /** Scene time until which a hit / head-loss animation still owns the body's scale and position. */
@@ -53,10 +55,29 @@ export class Dragon extends GameObjects.Container {
         if (animate) this.flash(0xffffff, 140);
     }
 
+    /** A day off begins / ends: the dragon dozes in the dark (no growls) or wakes up. */
+    setResting(on: boolean) {
+        if (this.resting === on) return;
+        this.resting = on;
+        this.cancelGrowl();
+        this.restoreTint();
+    }
+
+    get isResting() {
+        return this.resting;
+    }
+
+    /** The resting tint: tinted (defeated / resting) or clear. */
+    private restoreTint() {
+        if (this.defeated) this.bodyImg.setTint(0x8a8a8a).setTintMode(TintModes.MULTIPLY);
+        else if (this.resting) this.bodyImg.setTint(0x5d6688).setTintMode(TintModes.MULTIPLY);
+        else this.bodyImg.clearTint();
+    }
+
     private flash(color: number, ms: number) {
         this.bodyImg.setTint(color).setTintMode(TintModes.FILL);
         this.scene.time.delayedCall(ms, () => {
-            if (this.defeated) this.bodyImg.setTint(0x8a8a8a).setTintMode(TintModes.MULTIPLY);
+            if (this.defeated || this.resting) this.restoreTint();
             else this.bodyImg.clearTint();
         });
     }
@@ -124,7 +145,7 @@ export class Dragon extends GameObjects.Container {
         });
     }
 
-    /** Final head gone / plan closed: the dragon slumps and greys out until the next week regrows it. */
+    /** Final head gone / plan closed: the dragon slumps and greys out until the next day regrows it. */
     defeat() {
         this.cancelGrowl();
         this.epoch++;
@@ -141,7 +162,7 @@ export class Dragon extends GameObjects.Container {
     }
 
     canGrowl() {
-        return !this.defeated && this.heads > 0 && !this.growling && this.scene.time.now >= this.busyUntil;
+        return !this.defeated && !this.resting && this.heads > 0 && !this.growling && this.scene.time.now >= this.busyUntil;
     }
 
     /**
@@ -217,7 +238,7 @@ export class Dragon extends GameObjects.Container {
 
     private clearDefeat() {
         this.defeated = false;
-        this.bodyImg.clearTint();
+        this.restoreTint();
         this.bodyImg.setAngle(0);
     }
 }

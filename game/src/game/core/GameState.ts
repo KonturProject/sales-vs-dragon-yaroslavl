@@ -1,6 +1,6 @@
-import { DAYS } from './Constants';
+import { HEADS } from './Constants';
 
-/** A group's total this week. The Ulyanovsk game counts payments: `amount` is a NUMBER OF PAYMENTS, not money. */
+/** A group's total today. The game counts payments: `amount` is a NUMBER OF PAYMENTS, not money. */
 export interface RopAmount {
     ropName: string;
     amount: number;
@@ -16,15 +16,29 @@ export interface BackendCommand {
     issuedAt: number;
 }
 
+/** How a working day ended (backend `dayResult_`): payments against THAT day's plan. */
+export interface DayResult {
+    day: string;
+    total: number;
+    plan: number;
+    /** 0..HEADS */
+    headsCut: number;
+    defeated: boolean;
+}
+
 export interface StatusResponse {
     ok: boolean;
-    weekStart: string;
-    weekEnd: string;
+    /** Today, 'yyyy-MM-dd' in the sheet's time zone — a new day is a new dragon. */
+    day: string;
+    /** false on Saturday, Sunday and the weekdays the admin marked a day off: no plan, nothing counted. */
+    isWorkday: boolean;
+    /** Today's plan in force (its own or borrowed from an earlier working day, see planFrom). */
     plan: number;
-    totalThisWeek: number;
-    totalMeters?: number;
-    metersRemaining?: number;
+    planFrom?: string | null;
+    totalToday: number;
     byRop: RopAmount[];
+    /** The result of the last working day before today (shown on a day off, and in the morning announcement). */
+    lastResult?: DayResult | null;
     lastUpdated: string;
     /** Recent admin animation requests (absent on an older backend). */
     commands?: BackendCommand[];
@@ -43,13 +57,17 @@ export interface StatusResponse {
  */
 class GameStateStore {
     plan = 0;
-    totalThisWeek = 0;
+    totalToday = 0;
     byRop: Record<string, number> = {};
+    /** The day of the last status ('' before the first poll). */
+    day = '';
+    isWorkday = true;
+    lastResult: DayResult | null = null;
     /** true once at least one poll has landed — first poll is a baseline, never diffed */
     hasBaseline = false;
     /** Heads the dragon had after the previous poll — diffed to fire head-loss animations. */
-    lastHeads = DAYS;
-    /** Latched once the weekly plan is closed; released when ratio drops back under 1 (new week / raised plan). */
+    lastHeads = HEADS;
+    /** Latched once the day's plan is closed; released when ratio drops back under 1 (new day / raised plan). */
     dragonDefeated = false;
     lastFetchOk = false;
     lastUpdated: string | null = null;
@@ -59,7 +77,9 @@ class GameStateStore {
      * (for the caller to diff against) — null on the very first call.
      */
     applyStatus(status: StatusResponse): Record<string, number> | null {
-        const previous = this.hasBaseline ? this.byRop : null;
+        // A new day (or the first poll) is a baseline: the groups start again from zero, so nothing is diffed
+        // against yesterday's numbers — no strikes, the heads simply regrow.
+        const previous = this.hasBaseline && status.day === this.day ? this.byRop : null;
 
         const nextByRop: Record<string, number> = {};
         for (const row of status.byRop) {
@@ -68,7 +88,10 @@ class GameStateStore {
 
         this.byRop = nextByRop;
         this.plan = status.plan;
-        this.totalThisWeek = status.totalThisWeek;
+        this.totalToday = status.totalToday;
+        this.day = status.day;
+        this.isWorkday = status.isWorkday !== false;
+        this.lastResult = status.lastResult ?? null;
         this.lastUpdated = status.lastUpdated;
         this.lastFetchOk = true;
         this.hasBaseline = true;
@@ -78,23 +101,26 @@ class GameStateStore {
 
     get ratio(): number {
         if (this.plan <= 0) return 0;
-        return Math.min(1, Math.max(0, this.totalThisWeek / this.plan));
+        return Math.min(1, Math.max(0, this.totalToday / this.plan));
     }
 
     /**
-     * Dragon heads left: one is lost each time the cumulative total crosses another
-     * 1/DAYS of the weekly plan, so 0% -> DAYS heads and 100% -> 0 heads.
+     * Dragon heads left: one is lost each time today's total crosses another
+     * 1/HEADS of the day's plan, so 0% -> HEADS heads and 100% -> 0 heads.
      */
     get headsRemaining(): number {
-        return DAYS - Math.floor(this.ratio * DAYS + 1e-9);
+        return HEADS - Math.floor(this.ratio * HEADS + 1e-9);
     }
 
     reset() {
         this.plan = 0;
-        this.totalThisWeek = 0;
+        this.totalToday = 0;
         this.byRop = {};
+        this.day = '';
+        this.isWorkday = true;
+        this.lastResult = null;
         this.hasBaseline = false;
-        this.lastHeads = DAYS;
+        this.lastHeads = HEADS;
         this.dragonDefeated = false;
         this.lastFetchOk = false;
         this.lastUpdated = null;

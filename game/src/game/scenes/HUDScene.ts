@@ -1,8 +1,9 @@
-import { Display, GameObjects, Scene } from 'phaser';
-import { EventBus, GameEvents, ProgressChangedPayload, FetchErrorPayload, DragonHeadLostPayload, DragonDefeatedPayload, MoneyInPayload, AdminCommandPayload } from '../core/EventBus';
-import { GameState } from '../core/GameState';
+import { Display, GameObjects, Scene, Time } from 'phaser';
+import { EventBus, GameEvents, ProgressChangedPayload, FetchErrorPayload, DragonHeadLostPayload, DragonDefeatedPayload, MoneyInPayload, AdminCommandPayload, DayStatePayload } from '../core/EventBus';
+import { DayResult, GameState } from '../core/GameState';
+import { dayOffResultText, resultBanner } from '../systems/DayText';
 import { fitCameraToGame } from '../core/Render';
-import { DAYS, DRAGON, GAME, HUD, HeroSlug, POLL } from '../core/Constants';
+import { HEADS, DRAGON, GAME, HUD, HeroSlug, POLL } from '../core/Constants';
 import { emitConfettiBurst, flashScreen } from '../systems/Fx';
 import { RosterConfig } from '../systems/RosterConfig';
 import { Leaderboard } from '../objects/Leaderboard';
@@ -19,6 +20,11 @@ const STATUS_Y = GAME.HEIGHT - 16;
 const STATUS_TICK_MS = 30000;
 const MUTE_X = STATUS_X - 190;
 const MUTE_Y = GAME.HEIGHT - 16;
+/** The day's result announced after the morning import stays this long, then the stage is today's again. */
+const RESULT_BANNER_MS = 60_000;
+/** Banners sit in the empty sky between the leaderboard and the dragon. */
+const BANNER_X = 560;
+const BANNER_Y = 215;
 
 export class HUDScene extends Scene {
     private track!: GameObjects.Graphics;
@@ -27,6 +33,11 @@ export class HUDScene extends Scene {
     private title!: GameObjects.Text;
     private headsText!: GameObjects.Text;
     private banner: GameObjects.Container | null = null;
+    /** «Вчерашний дракон пал!» — shown for RESULT_BANNER_MS after the morning import. */
+    private resultBanner: GameObjects.Container | null = null;
+    private resultTimer: Time.TimerEvent | null = null;
+    /** «Выходной» panel, while today is a day off. */
+    private dayOffPanel: GameObjects.Container | null = null;
     private statusDot!: GameObjects.Arc;
     private statusText!: GameObjects.Text;
     private muteIcon!: GameObjects.Text;
@@ -44,7 +55,7 @@ export class HUDScene extends Scene {
     create() {
         fitCameraToGame(this);
 
-        this.title = this.add.text(GAME.WIDTH / 2, 4, 'НЕДЕЛЬНЫЙ ПЛАН — ПОБЕДИ ДРАКОНА', {
+        this.title = this.add.text(GAME.WIDTH / 2, 4, 'ДНЕВНОЙ ПЛАН — ПОБЕДИ ДРАКОНА', {
             fontFamily: 'Arial Black, Arial, sans-serif',
             fontSize: '13px',
             resolution: GAME.RENDER_SCALE,
@@ -165,8 +176,17 @@ export class HUDScene extends Scene {
         };
         EventBus.on(GameEvents.DRAGON_HEAD_LOST, onHeadLost);
 
+        // A working day / a day off: the «Выходной» panel with the last working day's result.
+        const onDayState = (payload: DayStatePayload) => this.renderDayOff(payload);
+        EventBus.on(GameEvents.DAY_STATE, onDayState);
+        this.renderDayOff({ isWorkday: GameState.isWorkday, lastResult: GameState.lastResult });
+
         // Full-screen celebration on request from the admin page (visual only).
         const onAdminCommand = (cmd: AdminCommandPayload) => {
+            if (cmd.type === 'dayResult') {
+                this.showResultBanner(cmd.args as unknown as DayResult);
+                return;
+            }
             if (cmd.type !== 'confetti' && cmd.type !== 'celebrate') return;
             emitConfettiBurst(this, 120);
             flashScreen(this, 0xffe89a, 0.3, 200, 2);
@@ -175,6 +195,7 @@ export class HUDScene extends Scene {
 
         this.events.once('shutdown', () => {
             EventBus.off(GameEvents.ADMIN_COMMAND, onAdminCommand);
+            EventBus.off(GameEvents.DAY_STATE, onDayState);
             EventBus.off(GameEvents.PROGRESS_CHANGED, handler);
             EventBus.off(GameEvents.DATA_UPDATED, onDataUpdated);
             EventBus.off(GameEvents.FETCH_ERROR, onFetchError);
@@ -217,9 +238,9 @@ export class HUDScene extends Scene {
         const target = Math.min(1, Math.max(0, payload.ratio));
         const isFirstRender = !this.hasBaseline; // hasBaseline is flipped below; the label must be drawn once even for 0 / 0
 
-        // Regrown heads (new week / raised plan) show immediately; lost heads
+        // Regrown heads (new day / raised plan) show immediately; lost heads
         // are shown by the delayed head-loss handler so the counter matches the art.
-        if (!this.hasBaseline || payload.headsRemaining > this.shownHeads) this.renderHeads(payload.headsRemaining);
+        if (!this.hasBaseline || payload.reset || payload.headsRemaining > this.shownHeads) this.renderHeads(payload.headsRemaining);
         this.hasBaseline = true;
         if (payload.ratio < 1) this.hideVictoryBanner();
 
@@ -237,10 +258,10 @@ export class HUDScene extends Scene {
 
         // Odometer-style count-up instead of snapping the number instantly —
         // same tween-a-plain-property trick already used for displayedRatio.
-        if (isFirstRender || this.displayedTotal !== payload.totalThisWeek || this.displayedPlan !== payload.plan) {
+        if (isFirstRender || this.displayedTotal !== payload.totalToday || this.displayedPlan !== payload.plan) {
             this.tweens.add({
                 targets: this,
-                displayedTotal: payload.totalThisWeek,
+                displayedTotal: payload.totalToday,
                 displayedPlan: payload.plan,
                 duration: 500,
                 ease: 'Sine.easeOut',
@@ -249,22 +270,22 @@ export class HUDScene extends Scene {
         }
     }
 
-    private shownHeads = DAYS;
+    private shownHeads = HEADS;
     private hasBaseline = false;
 
     private renderHeads(heads: number) {
         this.shownHeads = heads;
-        this.headsText.setText(heads > 0 ? `ГОЛОВ У ДРАКОНА: ${heads} / ${DAYS}` : 'ДРАКОН ПОБЕЖДЁН');
+        this.headsText.setText(heads > 0 ? `ГОЛОВ У ДРАКОНА: ${heads} / ${HEADS}` : 'ДРАКОН ПОБЕЖДЁН');
     }
 
-    /** Day dividers on the weekly bar — each one is a daily plan (weekly plan / DAYS). */
+    /** Head dividers on the day's bar — each one is a fifth of the day's plan. */
     private drawDayMarks() {
         const g = this.add.graphics();
         g.lineStyle(2, 0x8fb8d9, 0.55);
-        for (let d = 1; d <= DAYS; d++) {
-            const x = BAR_X + (BAR_WIDTH * d) / DAYS;
-            if (d < DAYS) g.lineBetween(x, BAR_Y + 3, x, BAR_Y + BAR_HEIGHT - 3);
-            this.add.text(x - 6, BAR_Y + BAR_HEIGHT + 5, `день ${d}`, {
+        for (let d = 1; d <= HEADS; d++) {
+            const x = BAR_X + (BAR_WIDTH * d) / HEADS;
+            if (d < HEADS) g.lineBetween(x, BAR_Y + 3, x, BAR_Y + BAR_HEIGHT - 3);
+            this.add.text(x - 6, BAR_Y + BAR_HEIGHT + 5, `голова ${d}`, {
                 fontFamily: 'Arial, sans-serif',
                 fontSize: '12px',
                 resolution: GAME.RENDER_SCALE,
@@ -277,8 +298,8 @@ export class HUDScene extends Scene {
         if (this.banner) return;
         // Upper-left of the scene: the empty sky between the leaderboard and the dragon,
         // so the banner never covers the dragon or the heroes.
-        const cx = 495;
-        const cy = 215;
+        const cx = BANNER_X;
+        const cy = BANNER_Y;
         const panel = this.add.graphics();
         panel.fillStyle(0x0d1220, 0.88);
         panel.fillRoundedRect(-290, -62, 580, 124, 18);
@@ -290,13 +311,14 @@ export class HUDScene extends Scene {
             resolution: GAME.RENDER_SCALE,
             color: '#ffe89a',
         }).setOrigin(0.5).setStroke('#7a4a00', 6);
-        const sub = this.add.text(0, 28, 'План недели выполнен', {
+        const sub = this.add.text(0, 28, 'План дня выполнен', {
             fontFamily: 'Arial Black, Arial, sans-serif',
             fontSize: '22px',
             resolution: GAME.RENDER_SCALE,
             color: '#ffffff',
         }).setOrigin(0.5).setShadow(0, 2, '#000000', 4, false, true);
         this.banner = this.add.container(cx, cy, [panel, title, sub]).setDepth(3000).setAlpha(0).setScale(0.6);
+        if (this.resultBanner || this.dayOffPanel) this.banner.setVisible(false); // the announcement has the sky for now
         this.tweens.add({ targets: this.banner, alpha: 1, scale: 1, duration: 450, ease: 'Back.easeOut' });
         this.tweens.add({ targets: this.banner, scale: 1.03, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut', delay: 500 });
     }
@@ -310,10 +332,80 @@ export class HUDScene extends Scene {
     }
 
     private drawLabel() {
+        if (!GameState.isWorkday) {
+            this.label.setText('Выходной');
+            return;
+        }
         this.label.setText(
-            // Payments, not money: «14 / 60 оплат».
-            `${Math.round(this.displayedTotal).toLocaleString('ru-RU')} / ${Math.round(this.displayedPlan).toLocaleString('ru-RU')} оплат`
+            // Payments, not money: «14 / 60 оплат сегодня».
+            `${Math.round(this.displayedTotal).toLocaleString('ru-RU')} / ${Math.round(this.displayedPlan).toLocaleString('ru-RU')} оплат сегодня`
         );
+    }
+
+    /** A dark panel with a frame, a big title and a line under it — the look of the victory banner. */
+    private makePanel(titleText: string, subText: string, gold: boolean): GameObjects.Container {
+        const title = this.add.text(0, -20, titleText, {
+            fontFamily: 'Arial Black, Arial, sans-serif',
+            fontSize: '27px',
+            resolution: GAME.RENDER_SCALE,
+            color: gold ? '#ffe89a' : '#cfe3f5',
+        }).setOrigin(0.5).setStroke(gold ? '#7a4a00' : '#1a2a40', 6);
+        const sub = this.add.text(0, 28, subText, {
+            fontFamily: 'Arial Black, Arial, sans-serif',
+            fontSize: '20px',
+            resolution: GAME.RENDER_SCALE,
+            color: '#ffffff',
+        }).setOrigin(0.5).setShadow(0, 2, '#000000', 4, false, true);
+        const width = Math.max(520, Math.max(title.width, sub.width) + 70);
+        const panel = this.add.graphics();
+        panel.fillStyle(0x0d1220, 0.9);
+        panel.fillRoundedRect(-width / 2, -62, width, 124, 18);
+        panel.lineStyle(4, gold ? 0xc9a227 : 0x3a5a7a, 1);
+        panel.strokeRoundedRect(-width / 2, -62, width, 124, 18);
+        return this.add.container(BANNER_X, BANNER_Y, [panel, title, sub]).setDepth(3000);
+    }
+
+    /** The last working day's result after the morning import: for a minute, then today's fight has the stage again. */
+    private showResultBanner(result: DayResult) {
+        if (!result || typeof result.day !== 'string') return;
+        this.hideResultBanner(true);
+        const text = resultBanner(result, GameState.day);
+        const banner = this.makePanel(text.title, text.sub, result.defeated).setAlpha(0).setScale(0.6);
+        this.resultBanner = banner;
+        this.banner?.setVisible(false);
+        this.dayOffPanel?.setVisible(false);
+        this.tweens.add({ targets: banner, alpha: 1, scale: 1, duration: 450, ease: 'Back.easeOut' });
+        if (result.defeated) {
+            emitConfettiBurst(this, 140);
+            flashScreen(this, 0xffe89a, 0.35, 220, 3);
+        }
+        this.resultTimer = this.time.delayedCall(RESULT_BANNER_MS, () => this.hideResultBanner(false));
+    }
+
+    private hideResultBanner(instant: boolean) {
+        this.resultTimer?.remove();
+        this.resultTimer = null;
+        const b = this.resultBanner;
+        this.resultBanner = null;
+        if (b) {
+            if (instant) b.destroy();
+            else this.tweens.add({ targets: b, alpha: 0, duration: 400, onComplete: () => b.destroy() });
+        }
+        this.banner?.setVisible(true);
+        this.dayOffPanel?.setVisible(true);
+    }
+
+    /** A day off: «Выходной» and how the last working day ended; gone on a working day. */
+    private renderDayOff(state: DayStatePayload) {
+        this.dayOffPanel?.destroy();
+        this.dayOffPanel = null;
+        if (!state.isWorkday) {
+            this.dayOffPanel = this.makePanel('ВЫХОДНОЙ', dayOffResultText(state.lastResult), !!state.lastResult?.defeated);
+            if (this.resultBanner) this.dayOffPanel.setVisible(false);
+            this.hideVictoryBanner();
+        }
+        this.drawLabel();
+        this.leaderboard.setVisible(state.isWorkday);
     }
 
     private drawFill(ratio: number) {

@@ -1,4 +1,4 @@
-import { EventBus, GameEvents, LeadersChangedPayload, MoneyInPayload, ProgressChangedPayload, RosterChangedPayload } from '../core/EventBus';
+import { DayStatePayload, EventBus, GameEvents, LeadersChangedPayload, MoneyInPayload, ProgressChangedPayload, RosterChangedPayload } from '../core/EventBus';
 import { GameState, StatusResponse } from '../core/GameState';
 import { DRAGON, HERO, HERO_SLUGS, POLL } from '../core/Constants';
 import { RosterConfig } from './RosterConfig';
@@ -134,9 +134,10 @@ function diffAndEmit(previous: Record<string, number> | null, status: StatusResp
 
     const progress: ProgressChangedPayload = {
         ratio: GameState.ratio,
-        totalThisWeek: status.totalThisWeek,
+        totalToday: status.totalToday,
         plan: status.plan,
         headsRemaining: heads,
+        reset: isBaseline,
     };
     EventBus.emit(GameEvents.PROGRESS_CHANGED, progress);
     EventBus.emit(GameEvents.DATA_UPDATED, status);
@@ -159,7 +160,7 @@ function diffAndEmit(previous: Record<string, number> | null, status: StatusResp
         const delayMs = isBaseline ? 0 : settleDelayMs + lostCount * DRAGON.HEAD_LOSS_STAGGER_MS;
         EventBus.emit(GameEvents.DRAGON_DEFEATED, { delayMs });
     } else if (GameState.ratio < 1 && GameState.dragonDefeated) {
-        // New week (or a raised plan) dropped us back under 100% — un-latch so
+        // A new day (or a raised plan) dropped us back under 100% — un-latch so
         // crossing the goal again later re-fires the victory.
         GameState.dragonDefeated = false;
     }
@@ -209,14 +210,30 @@ function applyRoster(status: StatusResponse) {
     }
 }
 
+/** Last day state handed to the scenes (as JSON) — DAY_STATE goes out only when it changes. */
+let lastDayState = '';
+
+function emitDayState() {
+    const payload: DayStatePayload = { isWorkday: GameState.isWorkday, lastResult: GameState.lastResult };
+    const key = JSON.stringify(payload);
+    if (key === lastDayState) return;
+    lastDayState = key;
+    EventBus.emit(GameEvents.DAY_STATE, payload);
+}
+
 async function tick() {
     if (pollInFlight) return;
     pollInFlight = true;
     try {
         const status = await fetchStatus();
+        // A backend error (or an answer of another shape) is a failed poll, never numbers to show.
+        if (!status || status.ok !== true || typeof status.totalToday !== 'number' || typeof status.day !== 'string') {
+            throw new Error(`bad status: ${JSON.stringify(status).slice(0, 200)}`);
+        }
         const previous = GameState.applyStatus(status);
         consecutiveFailures = 0;
         applyRoster(status);
+        emitDayState();
         diffAndEmit(previous, status);
         dispatchCommands(status);
     } catch (err) {
@@ -242,6 +259,7 @@ export const DataPollingService = {
     /** Dev-only entry point: runs a synthetic status through exactly the same apply/diff path as a real poll. */
     applyForDebug(status: StatusResponse) {
         const previous = GameState.applyStatus(status);
+        emitDayState();
         diffAndEmit(previous, status);
     },
 

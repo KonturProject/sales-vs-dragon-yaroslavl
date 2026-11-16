@@ -32,7 +32,7 @@ export class Preloader extends Scene {
             this.load.image(`dragon_heads${heads}`, `dragon_heads${heads}.png`);
         }
         // Only the characters currently on stage; the admin can swap them later (systems/CharacterLoader.ts).
-        for (const hero of RosterConfig.heroes) queueCharacter(this.load, hero, () => false);
+        for (const hero of RosterConfig.fighters) queueCharacter(this.load, hero, () => false);
     }
 
     create() {
@@ -108,7 +108,7 @@ export class Preloader extends Scene {
             g.fillRoundedRect(0, 0, 360, 200, 24);
             g.generateTexture(key, 360, 200);
         } else {
-            const def = RosterConfig.heroes.find(h => h.sprite === key);
+            const def = RosterConfig.fighters.find(h => h.sprite === key);
             const color = def ? Display.Color.HexStringToColor(def.color).color : 0x888888;
             g.fillStyle(color, 1);
             g.fillCircle(60, 60, 55);
