@@ -79,8 +79,10 @@ async function post<T extends object>(body: Record<string, unknown>): Promise<T>
 /** Public, unauthenticated status (aggregates only) — same endpoint the game polls. */
 export async function fetchPublicStatus(): Promise<{
     ok: boolean;
+    day: string;
+    isWorkday: boolean;
     plan: number;
-    totalThisWeek: number;
+    totalToday: number;
     roster?: Record<string, string> | null;
     leaders?: Record<string, string> | null;
 } | null> {

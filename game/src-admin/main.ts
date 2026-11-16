@@ -4,7 +4,7 @@ import defaultRoster from '../src/game/config/heroRoster.json';
 import { GROUP_SLOTS, plateText, sanitiseLeaders, shortPersonName } from '../src/game/systems/Groups';
 import { paymentsText, pluralWord } from '../src/game/systems/Units';
 import { BackendError, callBackend, fetchPublicStatus, newRequestId } from './api';
-import { DayCounter, dayCaption } from './dayCounter';
+import { DayCounter, dayCaption, dayName } from './dayCounter';
 import { ParsedPayments, PaymentsFileError, parsePaymentsFile } from './paymentsFile';
 
 interface Character { id: string; name: string }
@@ -17,7 +17,7 @@ let roster: Record<string, string> = { ...(defaultRoster.selection as Record<str
 /** The group leaders on the nameplates (slot -> «Фамилия И.»), as the displays show them. */
 let leaders: Record<string, string> = sanitiseLeaders(null);
 
-/** The six departments (short sheet codes, in stage order) and the lead's slot. */
+/** The eight departments (short sheet codes, in stage order). */
 const LABELS = ropMapping.labels as Record<string, string>;
 const DEPARTMENTS = Object.entries(LABELS).map(([slug, rop]) => ({
     rop,
@@ -26,14 +26,13 @@ const DEPARTMENTS = Object.entries(LABELS).map(([slug, rop]) => ({
     get plate() { return plateText(slug, leaders); },
     get label() { return `${plateText(slug, leaders)} · ${characterName(roster[slug])}`; },
 }));
-const LEAD = 'lead';
 
 /** What the backend accepts as a leader's name (apps-script/Code.gs, setRoster). */
 const LEADER_NAME = /^[A-Za-zА-Яа-яЁё .'-]{0,40}$/;
 
 /** A "Sales" row; `count` — how many payments it stands for (the game counts payments, not money). */
 interface Sale { row: number; date: string; amount: number; rop: string; invoice?: string; count: number }
-interface Status { plan: number; totalThisWeek: number; weekStart: string; weekEnd: string; byRop: { ropName: string; amount: number }[] }
+interface Status { day: string; isWorkday: boolean; plan: number; totalToday: number; byRop: { ropName: string; amount: number }[] }
 interface ListSalesResponse { totalRows: number; shown: number; sales: Sale[]; status: Status }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -65,7 +64,7 @@ function showLogin(message = '') {
 }
 
 const FIELD_NAMES: Record<string, string> = {
-    plan: 'план (целое число оплат)', rop: 'отдел', amount: 'сумма', date: 'дата (не позже сегодня)', count: 'число оплат (0–999)', newPin: 'новый PIN', newPin_same: 'новый PIN совпадает со старым',
+    plan: 'план (целое число оплат, до 99 999)', days: 'дни плана (только будни)', dayOff: 'выходной', dayoff: 'это выходной день — оплаты не вносятся', rop: 'отдел', amount: 'сумма', date: 'дата (не позже сегодня)', count: 'число оплат (0–999)', newPin: 'новый PIN', newPin_same: 'новый PIN совпадает со старым',
     roster: 'список героев', leaders: 'имена РГ',
     pins: 'PIN-коды групп', pins_duplicate: 'PIN совпал с другим PIN — нажмите ещё раз',
     newPin_group: 'новый PIN совпадает с PIN-кодом руководителя группы',
@@ -96,6 +95,10 @@ function reportError(err: unknown) {
             setStatus('Демо-режим (config.json.useMock=true): бэкенд отключён.', 'error');
             break;
         case 'bad_request': {
+            if (err.detail?.field === 'dayoff') {
+                setStatus('Это выходной день — оплаты в него не вносятся.', 'error');
+                break;
+            }
             const where = err.detail?.row !== undefined ? ` (запись №${err.detail.row + 1})` : '';
             setStatus(`Проверьте поле: ${FIELD_NAMES[err.detail?.field ?? ''] ?? err.detail?.field ?? 'данные'}${where}.`, 'error');
             break;
@@ -148,28 +151,125 @@ tabButtons.forEach(b => b.addEventListener('click', () => openTab(b.dataset.tab!
 
 /* ------------------------------------------------------------------ plan */
 
-const planForm = $<HTMLFormElement>('plan-form');
-const planInput = $<HTMLInputElement>('plan');
+const plansBody = document.querySelector<HTMLTableSectionElement>('#plans-table tbody')!;
+const plansSave = $<HTMLButtonElement>('plans-save');
 const currentStatusEl = $<HTMLParagraphElement>('current-status');
 
-// Public read (no PIN): shows the real numbers so the plan is not edited blind.
-async function loadPlanTab() {
-    const status = await fetchPublicStatus();
-    if (!status) return;
-    planInput.value = String(status.plan);
-    currentStatusEl.textContent = `Сейчас: ${status.totalThisWeek} / ${payments(status.plan)}`;
-    currentStatusEl.hidden = false;
+/** A weekday as the backend lists it (listPlans / setDayPlans). */
+interface PlanDay { day: string; weekday: number; plan: number | null; dayOff: boolean; effectivePlan: number; planFrom: string | null }
+/** What the backend holds, by day — the form's rows are compared with it to send only what changed. */
+let planDays: PlanDay[] = [];
+let planToday = '';
+const planInputs = new Map<string, { plan: HTMLInputElement; off: HTMLInputElement }>();
+
+function renderPlans() {
+    planInputs.clear();
+    plansBody.replaceChildren(...planDays.map(d => {
+        const tr = document.createElement('tr');
+        if (d.day === planToday) tr.className = 'today';
+        if (d.weekday === 1 && d !== planDays[0]) tr.classList.add('week-start');
+
+        const plan = document.createElement('input');
+        plan.type = 'number';
+        plan.min = '0';
+        plan.max = '99999';
+        plan.step = '1';
+        plan.inputMode = 'numeric';
+        plan.className = 'plan-input';
+        plan.placeholder = d.plan === null && d.effectivePlan > 0 && !d.dayOff ? String(d.effectivePlan) : '';
+        plan.value = d.plan === null ? '' : String(d.plan);
+        plan.setAttribute('aria-label', `План на ${dayName(d.day)}`);
+
+        const off = document.createElement('input');
+        off.type = 'checkbox';
+        off.checked = d.dayOff;
+        off.setAttribute('aria-label', `${dayName(d.day)} — выходной`);
+        const offLabel = document.createElement('label');
+        offLabel.className = 'dayoff';
+        offLabel.append(off, document.createTextNode(' выходной'));
+
+        const inForce = d.dayOff
+            ? 'выходной'
+            : d.plan !== null
+                ? payments(d.plan)
+                : d.planFrom
+                    ? `${payments(d.effectivePlan)}, как ${ruDate(d.planFrom).slice(0, 5)}`
+                    : 'плана нет';
+
+        const name = d.day === planToday ? `${dayName(d.day)} · сегодня` : dayName(d.day);
+        tr.append(cell(name), wrap(plan, 'num'), wrap(offLabel), cell(inForce, d.plan === null && !d.dayOff ? 'meta' : ''));
+        planInputs.set(d.day, { plan, off });
+        const changed = () => { plansSave.disabled = planChanges().length === 0; };
+        plan.addEventListener('input', changed);
+        off.addEventListener('change', changed);
+        return tr;
+    }));
+    plansSave.disabled = true;
 }
 
-planForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setStatus('Сохраняю…');
+function wrap(el: HTMLElement, className = '') {
+    const td = document.createElement('td');
+    if (className) td.className = className;
+    td.append(el);
+    return td;
+}
+
+/** The rows that differ from what the backend holds: [{ day, plan?, dayOff? }]. */
+function planChanges(): { day: string; plan?: number | null; dayOff?: boolean }[] {
+    const out: { day: string; plan?: number | null; dayOff?: boolean }[] = [];
+    for (const d of planDays) {
+        const inputs = planInputs.get(d.day);
+        if (!inputs) continue;
+        const typed = inputs.plan.value.trim();
+        const plan = typed === '' ? null : Number(typed);
+        const change: { day: string; plan?: number | null; dayOff?: boolean } = { day: d.day };
+        if (plan !== d.plan) change.plan = plan;
+        if (inputs.off.checked !== d.dayOff) change.dayOff = inputs.off.checked;
+        if ('plan' in change || 'dayOff' in change) out.push(change);
+    }
+    return out;
+}
+
+async function loadPlanTab() {
+    // Public read (no PIN): today's numbers, so the plan is not edited blind.
+    fetchPublicStatus().then(status => {
+        if (!status) return;
+        currentStatusEl.textContent = status.isWorkday
+            ? `Сегодня: ${status.totalToday} / ${payments(status.plan)}`
+            : 'Сегодня выходной';
+        currentStatusEl.hidden = false;
+    });
+    if (!pin) return;
     try {
-        const res = await callBackend<{ plan: number }>('setPlan', pin, { plan: Number(planInput.value) });
-        setStatus(`План обновлён: ${payments(res.plan)} в неделю.`, 'ok');
+        const res = await callBackend<{ today: string; days: PlanDay[] }>('listPlans', pin);
+        planDays = res.days;
+        planToday = res.today;
+        renderPlans();
+    } catch (err) {
+        reportError(err);
+    }
+}
+
+plansSave.addEventListener('click', async () => {
+    const days = planChanges();
+    if (days.length === 0) return;
+    const bad = days.find(d => d.plan !== undefined && d.plan !== null && !(Number.isInteger(d.plan) && d.plan >= 0 && d.plan <= 99999));
+    if (bad) {
+        setStatus(`План на ${dayName(bad.day)}: целое число оплат от 0 до 99 999 (пусто — взять с предыдущего дня).`, 'error');
+        return;
+    }
+    setStatus('Сохраняю план…');
+    plansSave.disabled = true;
+    try {
+        const res = await callBackend<{ today: string; days: PlanDay[] }>('setDayPlans', pin, { days });
+        planDays = res.days;
+        planToday = res.today;
+        renderPlans();
+        setStatus('План сохранён. Экраны подхватят его в течение ~15 секунд.', 'ok');
         tableStale = true;
         loadPlanTab();
     } catch (err) {
+        plansSave.disabled = false;
         reportError(err);
     }
 });
@@ -196,12 +296,13 @@ async function loadTable() {
     try {
         const res = await callBackend<ListSalesResponse>('listSales', pin, { limit: 50 });
         const s = res.status;
-        const percent = s.plan > 0 ? Math.round((s.totalThisWeek / s.plan) * 100) : 0;
+        const percent = s.plan > 0 ? Math.round((s.totalToday / s.plan) * 100) : 0;
 
+        const percent2 = percent;
         tableSummary.replaceChildren(
-            chip('Неделя', `${s.weekStart} — ${s.weekEnd}`),
-            chip('План', payments(s.plan)),
-            chip('Набрано', `${payments(s.totalThisWeek)} (${percent}%)`),
+            chip('Сегодня', s.isWorkday ? ruDate(s.day) : `${ruDate(s.day)}, выходной`),
+            chip('План дня', payments(s.plan)),
+            chip('Набрано', `${payments(s.totalToday)} (${percent2}%)`),
             ...s.byRop.map(r => chip(r.ropName, payments(r.amount))),
         );
 
@@ -318,6 +419,7 @@ async function sendCommand(button: HTMLButtonElement) {
             requestId: newRequestId(),
         });
         setStatus(`Отправлено: «${button.textContent}». Экраны покажут в течение ~15 секунд.`, 'ok');
+        if (button.dataset.cmd === 'dayResult') setStatus('Итог последнего рабочего дня отправлен на экраны — покажется в течение ~15 секунд.', 'ok');
     } catch (err) {
         reportError(err);
     } finally {
@@ -484,7 +586,7 @@ $('group-pins-copy').addEventListener('click', async () => {
 const rosterRows = $<HTMLDivElement>('roster-rows');
 const rosterGallery = $<HTMLDivElement>('roster-gallery');
 const rosterSave = $<HTMLButtonElement>('roster-save');
-const SLOTS = [...DEPARTMENTS.map(d => ({ slug: d.slug, name: d.rop })), { slug: LEAD, name: 'Лидер филиала' }];
+const SLOTS = DEPARTMENTS.map(d => ({ slug: d.slug, name: d.rop }));
 
 let activeSlot = SLOTS[0].slug;
 /** What the form currently shows (may differ from `roster` / `leaders` until saved). */
@@ -504,7 +606,7 @@ function renderHeroes() {
         select.value = draft[slot.slug];
         select.addEventListener('change', () => { draft[slot.slug] = select.value; activeSlot = slot.slug; renderHeroes(); });
 
-        // The group leader on the nameplate (the branch lead has no plate).
+        // The group leader on the nameplate.
         let leader: HTMLElement = document.createElement('span');
         if (GROUP_SLOTS.includes(slot.slug)) {
             const input = document.createElement('input');
@@ -602,10 +704,12 @@ const importNotes = $<HTMLUListElement>('import-notes');
 const importRun = $<HTMLButtonElement>('import-run');
 
 /** What the sheet holds for the file's period now, in payments (`manualPayments` — numbers saved by the leaders / the admin). */
-interface PeriodNow { rows: number; payments: number; manualPayments: number; byRop: Record<string, number> }
+interface PeriodNow { rows: number; payments: number; manualPayments: number; todayPayments: number; byRop: Record<string, number> }
+/** What the dry run says besides the current numbers. */
+interface DryRun { current: PeriodNow; dayOffPayments: number; announces: string | null }
 
 /** The file read and checked against the sheet, waiting for «Загрузить». */
-let pendingImport: { file: ParsedPayments; now: PeriodNow } | null = null;
+let pendingImport: { file: ParsedPayments; now: PeriodNow; dry: DryRun } | null = null;
 
 const lines = (n: number) => `${n} ${pluralWord(n, 'строка', 'строки', 'строк')}`;
 const invoices = (n: number) => `${n} ${pluralWord(n, 'счёт', 'счёта', 'счетов')}`;
@@ -624,7 +728,7 @@ function cell(text: string, className = '') {
     return td;
 }
 
-function renderImportPreview(file: ParsedPayments, now: PeriodNow) {
+function renderImportPreview(file: ParsedPayments, now: PeriodNow, dry: DryRun) {
     const period = file.from === file.to ? ruDate(file.from) : `${ruDate(file.from)} — ${ruDate(file.to)}`;
     const after = file.rows.length; // one invoice = one payment
     importSummary.replaceChildren(
@@ -651,6 +755,11 @@ function renderImportPreview(file: ParsedPayments, now: PeriodNow) {
     if (now.manualPayments > 0) {
         notes.push({ text: `Из них нащёлкано РГ или внесено в админке: ${payments(now.manualPayments)} — они тоже заменятся счетами файла.` });
     }
+    if (now.todayPayments > 0) {
+        notes.push({ text: `Файл заходит в сегодняшний день: сегодняшние ${payments(now.todayPayments)}, нащёлканные РГ, заменятся счетами из файла. Для итога вчерашнего дня загружайте выгрузку только за вчера.`, warn: true });
+    }
+    if (dry.dayOffPayments > 0) notes.push({ text: `${payments(dry.dayOffPayments)} с датой в выходной — запишутся в таблицу, но в игре не считаются.`, warn: true });
+    if (dry.announces) notes.push({ text: `После загрузки экраны объявят итог дня ${ruDate(dry.announces)} — «дракон пал» или сколько голов срублено.` });
     if (file.cheap > 0) notes.push({ text: `Не считаются: ${invoices(file.cheap)} дешевле 100 ₽.` });
     if (file.fileTotal !== null) {
         if (Math.abs(file.fileTotal - file.linesTotal) < 0.5) notes.push({ text: 'Файл прочитан целиком: сумма его строк сходится с итогом «Сумма заказа».' });
@@ -700,9 +809,9 @@ importFile.addEventListener('change', async () => {
     // A dry run: the backend checks every row and says what the sheet holds for the period now.
     setStatus('Сверяю с таблицей…');
     try {
-        const res = await callBackend<{ current: PeriodNow }>('importSales', pin, { from: file.from, to: file.to, rows: file.rows, dryRun: true });
-        pendingImport = { file, now: res.current };
-        renderImportPreview(file, res.current);
+        const res = await callBackend<DryRun>('importSales', pin, { from: file.from, to: file.to, rows: file.rows, dryRun: true });
+        pendingImport = { file, now: res.current, dry: res };
+        renderImportPreview(file, res.current, res);
         setStatus('');
     } catch (err) {
         reportError(err);
@@ -713,17 +822,20 @@ importRun.addEventListener('click', async () => {
     if (!pendingImport) return;
     const { file, now } = pendingImport;
     const period = file.from === file.to ? ruDate(file.from) : `${ruDate(file.from)} — ${ruDate(file.to)}`;
-    if (!confirm(`Заменить оплаты за ${period}?\n\nСейчас в таблице: ${payments(now.payments)}.\nСтанет: ${payments(file.rows.length)} (по счетам из файла).\n\nЭто настоящая запись: итоги недели изменятся, на экранах ударят герои.`)) return;
+    if (!confirm(`Заменить оплаты за ${period}?\n\nСейчас в таблице: ${payments(now.payments)}.\nСтанет: ${payments(file.rows.length)} (по счетам из файла).\n\nЭто настоящая запись: итоги этих дней изменятся.`)) return;
 
     setStatus('Загружаю в таблицу…');
     importRun.disabled = true;
     try {
-        const res = await callBackend<{ removed: { payments: number }; added: { payments: number } }>('importSales', pin, {
+        const res = await callBackend<{ removed: { payments: number }; added: { payments: number }; announced: { day: string; defeated: boolean; headsCut: number } | null }>('importSales', pin, {
             from: file.from, to: file.to, rows: file.rows, requestId: newRequestId(),
         });
         resetImport();
         tableStale = true;
-        setStatus(`Загружено: ${payments(res.added.payments)} (было ${res.removed.payments}). Если число оплат этой недели выросло, герои ударят по очереди в течение ~15 секунд.`, 'ok');
+        const said = res.announced
+            ? ` Экраны объявят итог ${ruDate(res.announced.day)}: ${res.announced.defeated ? 'дракон пал!' : `срублено ${res.announced.headsCut} из 5 голов`}.`
+            : '';
+        setStatus(`Загружено: ${payments(res.added.payments)} (было ${res.removed.payments}).${said}`, 'ok');
     } catch (err) {
         reportError(err);
     } finally {

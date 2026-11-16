@@ -761,3 +761,46 @@ button.counter-save {
         flex-wrap: wrap;
     }
 }
+
+/* ------------------------------------------------------- plans (Yaroslavl) */
+
+.plans-table td {
+    vertical-align: middle;
+}
+
+.plans-table tr.today td {
+    background: rgba(52, 216, 232, 0.10);
+}
+
+.plans-table tr.week-start td {
+    border-top: 2px solid var(--panel-border);
+}
+
+.plans-table input.plan-input {
+    width: 7em;
+    margin: 0;
+    padding: 6px 8px;
+    text-align: right;
+}
+
+.plans-table label.dayoff {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    white-space: nowrap;
+}
+
+.plans-table input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+.plans-table td.meta {
+    color: var(--text-dim);
+}

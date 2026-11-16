@@ -18,7 +18,8 @@ export const DEFAULT_LEADERS = ropMapping.leaders as Record<string, string>;
 /** Cyrillic and look-alike Latin letters are all written in sheets by hand — fold them so «ЕСЦ5» matches however it was typed. */
 const LOOKALIKE: Record<string, string> = { E: 'Е', e: 'е', C: 'С', c: 'с' };
 function normalise(name: string): string {
-    return name.trim().replace(/\s+/g, ' ').replace(/[EeCc]/g, c => LOOKALIKE[c]).toUpperCase();
+    return name.trim().replace(/\s+/g, ' ').replace(/ESC(?= ?\d)/gi, 'ЕСЦ') // «ESC5» typed in Latin, as it sounds
+        .replace(/[EeCc]/g, c => LOOKALIKE[c]).toUpperCase();
 }
 const normalisedMapping = new Map<string, string>();
 const slotByNumber = new Map<string, string>();
@@ -35,7 +36,7 @@ export function slotForGroup(name: string): string | null {
     const hit = normalisedMapping.get(folded);
     if (hit) return hit;
     // A full CRM name is recognised by its «ЕСЦ<число>» part.
-    const m = /(?:^|[^А-ЯЁ0-9])ЕСЦ(\d+)(?![0-9])/.exec(folded);
+    const m = /(?:^|[^А-ЯЁ0-9])ЕСЦ ?(\d+)(?![0-9])/.exec(folded);
     return m ? slotByNumber.get(m[1]) ?? null : null;
 }
 
